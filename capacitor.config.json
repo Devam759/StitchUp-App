@@ -1,0 +1,11 @@
+{
+  "appId": "com.stitchup.app",
+  "appName": "StitchUp",
+  "webDir": "Frontend/dist",
+  "plugins": {
+    "FirebaseAuthentication": {
+      "skipNativeAuth": false,
+      "providers": ["phone"]
+    }
+  }
+}

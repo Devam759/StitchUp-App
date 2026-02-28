@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "697322928832",
+    "project_id": "stitchup-app-db287",
+    "storage_bucket": "stitchup-app-db287.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:697322928832:android:6ed4480fbf0124f0b88b25",
+        "android_client_info": {
+          "package_name": "com.stitchup.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDOSSermSh9UemqdUFJI1F-j4h0vRL3oSg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

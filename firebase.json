@@ -1,5 +1,6 @@
 {
     "hosting": {
+        "site": "stitchup-app-db287-98a0c",
         "public": "Frontend/dist",
         "ignore": [
             "firebase.json",

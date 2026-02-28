@@ -1,15 +1,19 @@
 {
-  "name": "stichup",
+  "name": "stichup-root",
   "private": true,
-  "version": "0.1.0",
-  "description": "Root config to proxy npm scripts to Frontend",
+  "version": "0.0.0",
   "scripts": {
-    "install:frontend": "npm --prefix Frontend install",
-    "dev": "npm --prefix Frontend run dev",
-    "build": "npm --prefix Frontend run build",
-    "preview": "npm --prefix Frontend run preview",
-    "lint": "npm --prefix Frontend run lint || echo 'lint script not defined in Frontend'"
+    "build:web": "cd Frontend && npm run build",
+    "sync": "npm run build:web && npx cap sync android",
+    "dev:web": "cd Frontend && npm run dev",
+    "open:android": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/core": "^8.1.0",
+    "firebase": "^12.6.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.1.0"
   }
 }
-
-

@@ -4,10 +4,13 @@ import Footer from '../components/Footer'
 import PrimaryButton from '../components/ui/PrimaryButton'
 import OTPModal from '../components/OTPModal'
 import Toast from '../components/Toast'
+import OTPTroubleshootModal from '../components/OTPTroubleshootModal'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase'
+
+
 
 const Signup = () => {
   const navigate = useNavigate()
@@ -24,17 +27,76 @@ const Signup = () => {
   const [toast, setToast] = useState(false)
   const [confirmationResult, setConfirmationResult] = useState(null)
   const [otpLoading, setOtpLoading] = useState(false)
+  const [showTroubleshoot, setShowTroubleshoot] = useState(false)
 
   const onChange = (e) => setForm({ ...form, [e.target.name]: e.target.value })
 
+  // Clean implementation of Firebase Auth with Invisible Recaptcha
   useEffect(() => {
+    // 1. Initialize Recaptcha cleanly on mount
+    const initRecaptcha = () => {
+      // Clear any existing instances
+      if (window.recaptchaVerifier) {
+        try { window.recaptchaVerifier.clear(); } catch (err) { console.warn("Error clearing reCAPTCHA verifier:", err); }
+        window.recaptchaVerifier = null;
+      }
+
+      try {
+        // Ensure DOM element exists before creating verifier
+        const recaptchaContainer = document.getElementById('recaptcha-container');
+        if (!recaptchaContainer) {
+          // Create the container element if it doesn't exist
+          const container = document.createElement('div');
+          container.id = 'recaptcha-container';
+          container.style.display = 'none'; // Keep invisible
+          document.body.appendChild(container);
+        }
+
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          size: 'invisible',
+          callback: (response) => {
+            // reCAPTCHA solved
+            console.log("Recaptcha verified:", response);
+          },
+          'expired-callback': () => {
+            console.log("Recaptcha expired");
+            // Optionally re-initialize after a delay to avoid rapid re-initialization
+            setTimeout(initRecaptcha, 1000);
+          },
+          'error-callback': (error) => {
+            console.error("Recaptcha error:", error);
+            setErrors({ form: "reCAPTCHA verification failed. Please try again." });
+          }
+        });
+
+        // Render the widget to ensure it's properly initialized
+        window.recaptchaVerifier.render()
+          .then(function (widgetId) {
+            console.log("reCAPTCHA widget rendered with ID:", widgetId);
+          })
+          .catch(function (error) {
+            console.error("reCAPTCHA render error:", error);
+          });
+      } catch (err) {
+        console.error("Failed to initialize Recaptcha:", err);
+        setErrors({ form: "Failed to initialize reCAPTCHA. Please refresh the page." });
+      }
+    };
+
+    initRecaptcha();
+
+    // Cleanup on unmount
     return () => {
       if (window.recaptchaVerifier) {
-        try { window.recaptchaVerifier.clear() } catch (e) { }
-        window.recaptchaVerifier = null
+        try {
+          window.recaptchaVerifier.clear();
+        } catch (err) {
+          console.warn("Error clearing reCAPTCHA verifier:", err);
+        }
+        window.recaptchaVerifier = null;
       }
-    }
-  }, [])
+    };
+  }, []);
 
   const onSubmit = async (e) => {
     e.preventDefault()
@@ -50,30 +112,37 @@ const Signup = () => {
       const uid = auth.currentUser?.uid
       if (!uid) { setErrors({ form: 'Phone verification required.' }); return }
 
-      const userRef = doc(db, 'users', uid)
-      const userSnap = await getDoc(userRef)
-      if (userSnap.exists()) { setErrors({ form: 'Account already exists.' }); return }
+      try {
+        const userRef = doc(db, 'users', uid)
 
-      const profile = {
-        fullName: form.fullName.trim(),
-        email: form.email || '',
-        phone: form.phone.replace(/\D/g, ''),
-        role: form.role,
-        createdAt: new Date().toISOString()
-      }
-      await setDoc(userRef, profile)
+        const profile = {
+          fullName: form.fullName.trim(),
+          email: form.email || '',
+          phone: form.phone.replace(/\D/g, ''),
+          role: form.role,
+          createdAt: new Date().toISOString()
+        }
 
-      const merged = { id: uid, uid, ...profile }
-      localStorage.setItem('currentUser', JSON.stringify(merged))
-      window.dispatchEvent(new Event('authChange'))
+        // Background tasks
+        getDoc(userRef).then(snap => {
+          if (!snap.exists()) {
+            setDoc(userRef, profile).catch(() => console.error("Background setDoc failed"))
+          }
+        }).catch(() => console.error("Background getDoc failed"))
 
-      setToast(true)
-      setTimeout(() => {
-        setToast(false)
+        // Don't wait for Firestore to instantly transition!
+        const merged = { id: uid, uid, ...profile }
+        localStorage.setItem('currentUser', JSON.stringify(merged))
+        window.dispatchEvent(new Event('authChange'))
+
         navigate(profile.role === 'tailor' ? '/tailor/dashboard' : '/customer')
-      }, 800)
+      } catch (dbError) {
+        console.error('Firestore error:', dbError)
+        navigate(form.role === 'tailor' ? '/tailor/dashboard' : '/customer')
+      }
     } catch (err) {
-      setErrors({ form: 'Failed to create account. Please try again.' })
+      console.error('Auth Signup Error:', err)
+      setErrors({ form: `Failed to create account. Error: ${err.message || 'Network disconnected'}` })
     }
   }
 
@@ -82,44 +151,110 @@ const Signup = () => {
       setErrors({ phone: 'Enter a valid 10-digit phone number' })
       return
     }
+
     setOtpLoading(true)
+    setErrors({})
+
     try {
-      const formattedPhone = '+91' + form.phone.replace(/\D/g, '')
-
-      if (window.recaptchaVerifier) {
-        try { window.recaptchaVerifier.clear() } catch (e) { }
-        window.recaptchaVerifier = null
+      const phoneDigits = form.phone.replace(/\D/g, '');
+      if (phoneDigits.length < 10) {
+        setErrors({ phone: 'Phone number must be at least 10 digits' });
+        setOtpLoading(false);
+        return;
       }
 
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        size: 'invisible'
-      })
+      // Format phone number with country code
+      const formattedPhone = '+91' + phoneDigits;
+      console.log("Formatted phone number:", formattedPhone);
 
-      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, window.recaptchaVerifier)
-      setConfirmationResult(confirmation)
-      setOtpOpen(true)
-      setErrors({})
+      // Failsafe: if verifier was somehow destroyed, re-create it
+      if (!window.recaptchaVerifier) {
+        console.log("Recreating reCAPTCHA verifier");
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          size: 'invisible',
+          'callback': (response) => {
+            console.log("reCAPTCHA verified:", response);
+          },
+          'expired-callback': () => {
+            console.log("reCAPTCHA expired");
+          }
+        });
+      }
+
+      console.log("Attempting to send OTP to:", formattedPhone);
+      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, window.recaptchaVerifier);
+
+      console.log("OTP Sent Successfully:", confirmation);
+      setConfirmationResult(confirmation);
+      setOtpOpen(true);
+
     } catch (error) {
-      console.error('Phone auth error:', error)
+      console.error('Phone Auth Error:', error)
       let msg = error.message
+
       if (error.code === 'auth/invalid-app-credential') {
-        msg = 'App verification failed. Please ensure your domain is added to "Authorized Domains" in Firebase Console.'
+        msg = 'App verification failed. Please check Firebase "Authorized Domains".'
+      } else if (error.code === 'auth/too-many-requests') {
+        msg = 'Too many attempts. Please try again later.'
+      } else if (error.code === 'auth/operation-not-allowed') {
+        msg = 'Phone authentication is not enabled for this Firebase project. Please contact the administrator to enable phone authentication in Firebase Console.'
+      } else if (error.code === 'auth/captcha-check-failed') {
+        msg = 'Security verification failed. Please refresh the page and try again.'
+      } else if (error.code === 'auth/quota-exceeded') {
+        msg = 'SMS quota exceeded. Please contact support or try again later.'
+      } else if (error.code === 'auth/user-disabled') {
+        msg = 'This account has been disabled. Please contact support.'
+      } else if (error.code.includes('network-request-failed')) {
+        msg = 'Network error. Please check your internet connection and try again.'
       }
-      setErrors({ phone: `Failed to send OTP: ${msg}` })
+
+      setErrors({ phone: `Error: ${msg}` })
+    } finally {
+      setOtpLoading(false)
     }
-    setOtpLoading(false)
   }
 
   const handleVerifyOtp = async (otp) => {
-    if (!otp || otp.length !== 6) return
+    if (!otp || otp.length !== 6) {
+      setErrors({ otp: 'OTP must be exactly 6 digits.' })
+      return
+    }
+
     try {
-      if (!confirmationResult) { setErrors({ phone: 'Session expired.' }); setOtpOpen(false); return }
-      await confirmationResult.confirm(otp)
+      if (!confirmationResult) {
+        setErrors({ phone: 'Session expired. Please request a new OTP.' })
+        setOtpOpen(false)
+        return
+      }
+
+      console.log("Attempting to confirm OTP...");
+      const result = await confirmationResult.confirm(otp)
+      console.log("User verified successfully:", result.user.uid)
+
       setOtpVerified(true)
       setOtpOpen(false)
+      setErrors({})
     } catch (error) {
-      setErrors({ phone: `Invalid OTP: ${error.message}` })
-      setOtpOpen(false)
+      console.error('OTP Verification Error:', error)
+      console.log('Error code:', error.code);
+      console.log('Error message:', error.message);
+
+      let msg = error.message;
+      if (error.code === 'auth/invalid-verification-code') {
+        msg = 'The OTP you entered is incorrect. Please try again.';
+      } else if (error.code === 'auth/code-expired') {
+        msg = 'The OTP has expired. Please request a new one.';
+        setOtpOpen(false); // Close the modal since the code is expired
+      } else if (error.code === 'auth/network-request-failed') {
+        msg = 'Network error. Please check your connection and try again.';
+      } else if (error.code === 'auth/too-many-requests') {
+        msg = 'Too many attempts. Please try again later.';
+      } else {
+        msg = `Verification failed: ${error.message}`;
+      }
+
+      setErrors({ otp: msg });
+      // Don't close the modal here - let the user try again or request new OTP
     }
   }
 
@@ -191,7 +326,7 @@ const Signup = () => {
                       : 'border border-[color:var(--color-primary)] text-[color:var(--color-primary)] hover:bg-[color:var(--color-primary)]/5 disabled:opacity-40 disabled:cursor-not-allowed'
                       }`}
                   >
-                    {otpVerified ? '✓ Verified' : otpLoading ? 'Sending...' : 'Get OTP'}
+                    {otpVerified ? '✓ Verified' : otpLoading ? 'Loading Check...' : 'Get OTP'}
                   </button>
                 </div>
                 {errors.phone && <p className="mt-1 text-xs text-red-600">{errors.phone}</p>}
@@ -203,6 +338,16 @@ const Signup = () => {
               <PrimaryButton type="submit" className="w-full py-3" disabled={!otpVerified}>
                 Create Account
               </PrimaryButton>
+
+              <div className="text-center mt-4">
+                <button
+                  type="button"
+                  className="text-xs text-[color:var(--color-primary)] hover:underline"
+                  onClick={() => setShowTroubleshoot(true)}
+                >
+                  Having trouble with OTP?
+                </button>
+              </div>
             </div>
 
             <div id="recaptcha-container"></div>
@@ -217,6 +362,10 @@ const Signup = () => {
       <Footer />
       <OTPModal open={otpOpen} onClose={() => setOtpOpen(false)} onVerify={handleVerifyOtp} />
       <Toast open={toast} type="success" message="Account created!" />
+      <OTPTroubleshootModal
+        isOpen={showTroubleshoot}
+        onClose={() => setShowTroubleshoot(false)}
+      />
     </div>
   )
 }
